@@ -30,6 +30,14 @@ For a quick code check without downloading data or training models:
 python scripts/smoke_test.py
 ```
 
+The robustness, learning-rate sensitivity, and conditioning ablations reported
+in the appendix can be reproduced after the main pipeline has produced the
+seed-5489 BCFM checkpoint and frozen evaluator:
+
+```bash
+bash scripts/reproduce_appendix.sh
+```
+
 ## Main files
 
 - `src/train_baselines.py`: FVSBN, MADE, and DCGAN.
@@ -37,5 +45,6 @@ python scripts/smoke_test.py
 - `src/train_bcfm.py`: the proposed BCFM model.
 - `src/evaluate.py`: frozen MNIST evaluator and common metrics.
 - `src/evaluate_bcfm.py`: compiled BF16 evaluation for BCFM.
+- `scripts/reproduce_appendix.sh`: optional controlled analyses from the report appendix.
 
 Use `python <file> --help` to inspect individual options. The report contains the model definitions, experimental protocol, and analysis.
