@@ -37,6 +37,8 @@ class Config:
     base_channels: int = 64
     ema_decay: float = 0.999
     time_scale: float = 100.0
+    label_dropout: float = 0.0
+    sample_guidance: float = 1.0
     sample_count: int = 100
 
 
@@ -52,6 +54,8 @@ def seed_everything(seed: int) -> None:
 class BalancedConditionalFlow(nn.Module):
     """Class-conditional velocity field used by BCFM."""
 
+    null_class = 10
+
     def __init__(self, base: int = 64, time_scale: float = 100.0):
         super().__init__()
         condition_dim = base * 4
@@ -62,7 +66,9 @@ class BalancedConditionalFlow(nn.Module):
             nn.SiLU(),
             nn.Linear(condition_dim, condition_dim),
         )
-        self.class_embedding = nn.Embedding(10, condition_dim)
+        # The extra row is used only by the classifier-free guidance ablation.
+        # Direct BCFM, the default method, evaluates one conditional field.
+        self.class_embedding = nn.Embedding(11, condition_dim)
         nn.init.normal_(self.class_embedding.weight, std=0.02)
         self.input = nn.Conv2d(1, base, 3, padding=1)
         self.enc1 = ResidualBlock(base, base, condition_dim)
@@ -136,13 +142,20 @@ def make_loaders(cfg: Config):
 
 
 def flow_loss(
-    model: BalancedConditionalFlow, x: torch.Tensor, labels: torch.Tensor
+    model: BalancedConditionalFlow,
+    x: torch.Tensor,
+    labels: torch.Tensor,
+    label_dropout: float = 0.0,
 ) -> torch.Tensor:
     """Return the conditional flow-matching regression loss."""
     batch = x.size(0)
     noise = torch.randn_like(x)
     t = torch.rand(batch, device=x.device)
     z = (1 - t[:, None, None, None]) * x + t[:, None, None, None] * noise
+    if label_dropout > 0:
+        labels = labels.clone()
+        drop = torch.rand(batch, device=x.device) < label_dropout
+        labels[drop] = model.null_class
     return F.mse_loss(model(z, t, labels), noise - x)
 
 
@@ -153,6 +166,7 @@ def sample(
     device: torch.device,
     steps: int = 25,
     labels: torch.Tensor | None = None,
+    guidance: float = 1.0,
 ) -> torch.Tensor:
     """Generate a class-balanced batch with explicit Euler integration."""
     if labels is None:
@@ -163,7 +177,13 @@ def sample(
     z = torch.randn(count, 1, 28, 28, device=device)
     times = torch.linspace(1, 0, steps + 1, device=device)
     for t, r in zip(times[:-1], times[1:]):
-        velocity = model(z, t.expand(count), labels)
+        conditional = model(z, t.expand(count), labels)
+        if guidance == 1.0:
+            velocity = conditional
+        else:
+            null_labels = torch.full_like(labels, model.null_class)
+            unconditional = model(z, t.expand(count), null_labels)
+            velocity = unconditional + guidance * (conditional - unconditional)
         z = z + (r - t) * velocity
     return z.add(1).div(2).clamp(0, 1)
 
@@ -184,7 +204,7 @@ def validation_loss(
     for index, (x, labels) in enumerate(loader):
         if index >= batches:
             break
-        values.append(flow_loss(model, x.to(device), labels.to(device)).item())
+        values.append(flow_loss(model, x.to(device), labels.to(device), 0.0).item())
     torch.random.set_rng_state(cpu_state)
     torch.cuda.set_rng_state(cuda_state, device)
     return float(np.mean(values))
@@ -227,7 +247,7 @@ def train(cfg: Config) -> None:
             x = x.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            loss = flow_loss(model, x, labels)
+            loss = flow_loss(model, x, labels, cfg.label_dropout)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -257,7 +277,13 @@ def train(cfg: Config) -> None:
             torch.save(state, output / "best.pt")
         if epoch in sample_epochs:
             save_image(
-                sample(ema, cfg.sample_count, device, 25),
+                sample(
+                    ema,
+                    cfg.sample_count,
+                    device,
+                    25,
+                    guidance=cfg.sample_guidance,
+                ),
                 output / "samples" / f"epoch_{epoch:03d}.png",
                 nrow=10,
             )
@@ -268,7 +294,13 @@ def train(cfg: Config) -> None:
     generation = {}
     for steps in [10, 25, 50]:
         tic = time.perf_counter()
-        images = sample(ema, cfg.sample_count, device, steps)
+        images = sample(
+            ema,
+            cfg.sample_count,
+            device,
+            steps,
+            guidance=cfg.sample_guidance,
+        )
         seconds = time.perf_counter() - tic
         generation[str(steps)] = {
             "seconds": seconds,
@@ -323,6 +355,8 @@ def parse_args() -> Config:
     parser.add_argument("--base-channels", type=int, default=64)
     parser.add_argument("--ema-decay", type=float, default=0.999)
     parser.add_argument("--time-scale", type=float, default=100.0)
+    parser.add_argument("--label-dropout", type=float, default=0.0)
+    parser.add_argument("--sample-guidance", type=float, default=1.0)
     parser.add_argument("--sample-count", type=int, default=100)
     return Config(**vars(parser.parse_args()))
 
