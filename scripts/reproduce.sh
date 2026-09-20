@@ -15,7 +15,7 @@ mkdir -p "$OUTPUT_DIR"
 # Flow-based models.
 "$PYTHON_BIN" src/train_flows.py --method flow --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR/flow" --epochs 80 --batch-size 256 --lr 6e-4 --time-scale 100
 "$PYTHON_BIN" src/train_flows.py --method imf --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR/imf" --epochs 80 --batch-size 256 --lr 3e-4 --time-scale 100 --adaptive-power 0 --auxiliary-head
-"$PYTHON_BIN" src/train_bcfm.py --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR/bcfm" --epochs 80 --batch-size 256 --lr 6e-4 --time-scale 100
+"$PYTHON_BIN" src/train_bcfm.py --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR/bcfm" --epochs 80 --batch-size 256 --lr 6e-4 --time-scale 100 --label-dropout 0 --sample-guidance 1
 
 # Frozen evaluator used by all reported sample metrics.
 "$PYTHON_BIN" src/evaluate.py train-classifier --data-dir "$DATA_DIR" --output "$OUTPUT_DIR/evaluator" --epochs 12 --batch-size 256 --lr 2e-3
