@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 import math
 import time
@@ -24,8 +25,13 @@ from evaluate import (
 
 
 @torch.inference_mode()
-def integrate(model, z, labels, steps: int):
-    with torch.autocast("cuda", dtype=torch.bfloat16):
+def integrate(model, z, labels, steps: int, use_bf16: bool = True):
+    precision = (
+        torch.autocast("cuda", dtype=torch.bfloat16)
+        if use_bf16
+        else nullcontext()
+    )
+    with precision:
         times = torch.linspace(1, 0, steps + 1, device=z.device)
         for t, r in zip(times[:-1], times[1:]):
             z = z + (r - t) * model(z, t.expand(z.size(0)), labels)
@@ -44,6 +50,11 @@ def main():
     parser.add_argument("--batch", type=int, default=256)
     parser.add_argument("--feature-batch", type=int, default=512)
     parser.add_argument("--steps", type=int, default=10)
+    parser.add_argument(
+        "--reference-fp32",
+        action="store_true",
+        help="Disable compilation and mixed precision for controlled analyses.",
+    )
     args = parser.parse_args()
     seed_everything(5489)
     device = torch.device("cuda")
@@ -60,13 +71,21 @@ def main():
     )
     model.load_state_dict(checkpoint["ema"])
     model.eval()
-    model = torch.compile(model, mode="max-autotune", fullgraph=True)
+    if not args.reference_fp32:
+        model = torch.compile(model, mode="max-autotune", fullgraph=True)
     warm_noise = torch.randn(args.batch, 1, 28, 28, device=device).to(
         memory_format=torch.channels_last
     )
     warm_labels = torch.arange(args.batch, device=device) % 10
-    for _ in range(3):
-        integrate(model, warm_noise, warm_labels, args.steps)
+    warmup_iterations = 1 if args.reference_fp32 else 3
+    for _ in range(warmup_iterations):
+        integrate(
+            model,
+            warm_noise,
+            warm_labels,
+            args.steps,
+            use_bf16=not args.reference_fp32,
+        )
     seed_everything(5489)
     torch.cuda.synchronize(device)
     tic = time.perf_counter()
@@ -74,11 +93,20 @@ def main():
     requested = []
     for start in range(0, args.samples, args.batch):
         n = min(args.batch, args.samples - start)
-        labels = torch.arange(start, start + args.batch, device=device) % 10
-        noise = torch.randn(args.batch, 1, 28, 28, device=device).to(
+        work_batch = n if args.reference_fp32 else args.batch
+        labels = torch.arange(start, start + work_batch, device=device) % 10
+        noise = torch.randn(work_batch, 1, 28, 28, device=device).to(
             memory_format=torch.channels_last
         )
-        generated.append(integrate(model, noise, labels, args.steps)[:n])
+        generated.append(
+            integrate(
+                model,
+                noise,
+                labels,
+                args.steps,
+                use_bf16=not args.reference_fp32,
+            )[:n]
+        )
         requested.append(labels[:n])
     torch.cuda.synchronize(device)
     generation_seconds = time.perf_counter() - tic
@@ -96,10 +124,18 @@ def main():
     real_pr = F.normalize(real_features[:n].float(), dim=1)
     fake_pr = F.normalize(fake_features[:n].float(), dim=1)
     metrics = {
-        "kind": "bcfm_compile_bf16_channels_last",
+        "kind": (
+            "bcfm_fp32_reference"
+            if args.reference_fp32
+            else "bcfm_compile_bf16_channels_last"
+        ),
         "nfe": args.steps,
         "samples": args.samples,
-        "timing_boundary": "warm-start batched sampling on GPU; excludes model load, compilation, D2H transfer, and metrics",
+        "timing_boundary": (
+            "warm-start batched FP32 sampling on GPU; excludes model load, D2H transfer, and metrics"
+            if args.reference_fp32
+            else "warm-start batched sampling on GPU; excludes model load, compilation, D2H transfer, and metrics"
+        ),
         "generation_seconds": generation_seconds,
         "milliseconds_per_image": generation_seconds * 1000 / args.samples,
         "mnist_feature_distance": frechet_distance(
