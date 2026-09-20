@@ -55,6 +55,12 @@ def main() -> None:
     bcfm = BalancedConditionalFlow(base=16, time_scale=100.0)
     labels = torch.tensor([0, 1])
     check_shape("BCFM", tuple(bcfm(images, times, labels).shape), tuple(images.shape))
+    null_labels = torch.full_like(labels, bcfm.null_class)
+    check_shape(
+        "BCFM null condition",
+        tuple(bcfm(images, times, null_labels).shape),
+        tuple(images.shape),
+    )
 
     print("All smoke tests passed.")
 
