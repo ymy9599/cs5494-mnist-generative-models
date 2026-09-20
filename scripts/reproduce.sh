@@ -22,7 +22,7 @@ mkdir -p "$OUTPUT_DIR"
 
 "$PYTHON_BIN" src/evaluate.py evaluate --kind fvsbn --checkpoint "$OUTPUT_DIR/fvsbn/best.pt" --classifier "$OUTPUT_DIR/evaluator/classifier.pt" --data-dir "$DATA_DIR" --output "$OUTPUT_DIR/eval_fvsbn"
 "$PYTHON_BIN" src/evaluate.py evaluate --kind made --checkpoint "$OUTPUT_DIR/made/best.pt" --classifier "$OUTPUT_DIR/evaluator/classifier.pt" --data-dir "$DATA_DIR" --output "$OUTPUT_DIR/eval_made"
-"$PYTHON_BIN" src/evaluate.py evaluate --kind gan --checkpoint "$OUTPUT_DIR/dcgan/best.pt" --classifier "$OUTPUT_DIR/evaluator/classifier.pt" --data-dir "$DATA_DIR" --output "$OUTPUT_DIR/eval_dcgan"
+"$PYTHON_BIN" src/evaluate.py evaluate --kind gan --checkpoint "$OUTPUT_DIR/dcgan/latest.pt" --classifier "$OUTPUT_DIR/evaluator/classifier.pt" --data-dir "$DATA_DIR" --output "$OUTPUT_DIR/eval_dcgan"
 
 for steps in 4 10 25 50; do
   "$PYTHON_BIN" src/evaluate.py evaluate --kind flow --checkpoint "$OUTPUT_DIR/flow/best.pt" --classifier "$OUTPUT_DIR/evaluator/classifier.pt" --data-dir "$DATA_DIR" --output "$OUTPUT_DIR/eval_flow_${steps}" --steps "$steps"
